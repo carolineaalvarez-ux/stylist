@@ -1,6 +1,7 @@
-import { ExternalLink, Heart } from 'lucide-react'
+import { Heart } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { feedbackApi, type Feedback } from '../lib/api'
+import { feedbackApi } from '../lib/api'
+import ProductCard from '../components/ProductCard'
 
 export default function Wishlist() {
   const { data: items = [], isLoading } = useQuery({
@@ -45,7 +46,11 @@ export default function Wishlist() {
             <Heart size={16} className="text-palette-burgundy" />
             Saved to wishlist ({accepted.length})
           </h2>
-          <WishlistGrid items={accepted} />
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-5">
+            {accepted.map(item => (
+              <ProductCard key={item.id} match={item.match} />
+            ))}
+          </div>
         </section>
       )}
 
@@ -54,27 +59,13 @@ export default function Wishlist() {
           <h2 className="text-base font-semibold text-gray-700 mb-4">
             Saved for later ({saved.length})
           </h2>
-          <WishlistGrid items={saved} />
+          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-5">
+            {saved.map(item => (
+              <ProductCard key={item.id} match={item.match} />
+            ))}
+          </div>
         </section>
       )}
-    </div>
-  )
-}
-
-function WishlistGrid({ items }: { items: Feedback[] }) {
-  // We only have feedback objects here — match.product is not eagerly loaded
-  // In a real app you'd fetch match details. For now show placeholders with IDs.
-  return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-5">
-      {items.map(item => (
-        <div key={item.id} className="card p-4 flex flex-col gap-2">
-          <p className="text-xs text-gray-400">Match ID</p>
-          <p className="text-xs font-mono text-gray-600 truncate">{item.match_id}</p>
-          <p className="text-xs text-gray-400 mt-auto">
-            {new Date(item.created_at).toLocaleDateString()}
-          </p>
-        </div>
-      ))}
     </div>
   )
 }

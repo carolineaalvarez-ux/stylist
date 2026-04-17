@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { Bell, Heart, LayoutGrid, Settings } from 'lucide-react'
+import { Bell, Heart, LayoutGrid } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from './lib/api'
 import Dashboard from './pages/Dashboard'

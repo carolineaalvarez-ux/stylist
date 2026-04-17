@@ -49,11 +49,13 @@ class ClaudeAnalysis:
 
 class ClaudeAnalyzer:
     def __init__(self):
-        if not settings.anthropic_api_key:
+        if settings.anthropic_api_key:
+            self._client: Optional[anthropic.AsyncAnthropic] = anthropic.AsyncAnthropic(
+                api_key=settings.anthropic_api_key,
+            )
+        else:
+            self._client = None
             logger.warning("ANTHROPIC_API_KEY not set — Claude analysis will be skipped")
-        self._client = anthropic.AsyncAnthropic(
-            api_key=settings.anthropic_api_key or "placeholder",
-        )
 
     async def analyze_product(
         self,
@@ -68,7 +70,7 @@ class ClaudeAnalyzer:
         is_borderline: bool,
     ) -> Optional[ClaudeAnalysis]:
         """Generate a full Deep Winter style analysis for a product."""
-        if not settings.anthropic_api_key:
+        if not self._client:
             return None
 
         prompt = self._build_prompt(
@@ -84,7 +86,7 @@ class ClaudeAnalyzer:
         )
 
         try:
-            response = await self._client.messages.create(
+            response = await self._client.messages.create(  # type: ignore[union-attr]
                 model="claude-sonnet-4-6",
                 max_tokens=600,
                 system=SYSTEM_PROMPT,
@@ -102,7 +104,7 @@ class ClaudeAnalyzer:
         Use Claude to extract fabric/composition from a tricky description
         that the regex parser couldn't parse cleanly.
         """
-        if not settings.anthropic_api_key:
+        if not self._client:
             return raw_description
 
         try:
