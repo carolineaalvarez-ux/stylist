@@ -6,11 +6,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..database import get_db
 from ..models import Match, UserFeedback
 from ..models.user_feedback import FeedbackAction
 from ..schemas import FeedbackIn, FeedbackOut
+from ..schemas.feedback import WishlistItemOut
 
 router = APIRouter(prefix="/feedback", tags=["feedback"])
 
@@ -24,11 +26,11 @@ async def submit_feedback(
     db: AsyncSession = Depends(get_db),
 ):
     if body.action not in VALID_ACTIONS:
-        raise HTTPException(400, f"action must be one of: {', '.join(VALID_ACTIONS)}")
+        raise HTTPException(status_code=400, detail=f"action must be one of: {', '.join(VALID_ACTIONS)}")
 
     match = await db.get(Match, match_id)
     if not match:
-        raise HTTPException(404, "Match not found")
+        raise HTTPException(status_code=404, detail="Match not found")
 
     feedback = UserFeedback(
         match_id=match_id,
@@ -36,8 +38,6 @@ async def submit_feedback(
         note=body.note,
     )
     db.add(feedback)
-
-    # Mark as read when user acts on it
     match.is_new = False
 
     await db.commit()
@@ -45,11 +45,16 @@ async def submit_feedback(
     return feedback
 
 
-@router.get("/wishlist", response_model=list[FeedbackOut])
+@router.get("/wishlist", response_model=list[WishlistItemOut])
 async def get_wishlist(db: AsyncSession = Depends(get_db)):
-    """Return all accepted/saved items."""
-    query = select(UserFeedback).where(
-        UserFeedback.action.in_(["accepted", "saved"])
-    ).order_by(UserFeedback.created_at.desc())
+    """Return all accepted/saved items with full product data."""
+    query = (
+        select(UserFeedback)
+        .where(UserFeedback.action.in_(["accepted", "saved"]))
+        .options(
+            selectinload(UserFeedback.match).selectinload(Match.product)
+        )
+        .order_by(UserFeedback.created_at.desc())
+    )
     rows = (await db.execute(query)).scalars().all()
     return rows

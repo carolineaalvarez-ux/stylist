@@ -68,6 +68,15 @@ export interface Feedback {
   created_at: string
 }
 
+export interface WishlistItem {
+  id: string
+  match_id: string
+  action: 'accepted' | 'saved'
+  note: string | null
+  created_at: string
+  match: Match
+}
+
 export interface Alert {
   id: string
   product: Product
@@ -96,7 +105,7 @@ export const feedbackApi = {
     api.post<Feedback>(`/feedback/${matchId}`, { action, note }),
 
   wishlist: () =>
-    api.get<Feedback[]>('/feedback/wishlist'),
+    api.get<WishlistItem[]>('/feedback/wishlist'),
 }
 
 export const alertsApi = {

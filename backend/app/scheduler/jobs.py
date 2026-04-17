@@ -138,9 +138,12 @@ async def _process_product(
     if product.image_url:
         color_result = await color_matcher.analyze_image(product.image_url)
     elif product.color_name:
-        # Use Vision API hex if available, else skip
-        color_result = color_matcher.analyze_hex("#000000")  # placeholder
-        color_result.score = 0  # will be overridden by Claude analysis
+        hex_color = _color_name_to_hex(product.color_name)
+        if hex_color:
+            color_result = color_matcher.analyze_hex(hex_color)
+        else:
+            logger.debug("Skipping %s — no image and unrecognised color name '%s'", product.name, product.color_name)
+            return
     else:
         return
 
@@ -236,3 +239,65 @@ def _is_priority_brand(brand: str) -> bool:
     if not brand:
         return False
     return brand.lower() in settings.priority_brands
+
+
+# Common color name → hex lookup for products without images
+_COLOR_NAME_HEX: dict[str, str] = {
+    "black": "#000000",
+    "white": "#FFFFFF",
+    "bright white": "#FFFFFF",
+    "off white": "#F8F8F0",
+    "navy": "#000080",
+    "navy blue": "#000080",
+    "blue": "#0047AB",
+    "royal blue": "#4169E1",
+    "cobalt": "#0047AB",
+    "cobalt blue": "#0047AB",
+    "teal": "#008080",
+    "emerald": "#006B3C",
+    "emerald green": "#006B3C",
+    "green": "#006B3C",
+    "red": "#CC0000",
+    "true red": "#CC0000",
+    "burgundy": "#800020",
+    "wine": "#800020",
+    "bordeaux": "#800020",
+    "plum": "#580F41",
+    "deep plum": "#580F41",
+    "purple": "#580F41",
+    "fuchsia": "#FF0090",
+    "magenta": "#FF0090",
+    "pink": "#FF69B4",
+    "hot pink": "#FF0090",
+    "charcoal": "#36454F",
+    "charcoal grey": "#36454F",
+    "grey": "#36454F",
+    "gray": "#36454F",
+    "dark grey": "#36454F",
+    "mahogany": "#3C1F1F",
+    "chocolate": "#3C1F1F",
+    # Warm tones — kept so they score low and get filtered
+    "camel": "#C19A6B",
+    "tan": "#D2B48C",
+    "beige": "#F5F5DC",
+    "ivory": "#FFFFF0",
+    "cream": "#FFFDD0",
+    "mustard": "#FFDB58",
+    "yellow": "#FFD700",
+    "orange": "#FFA500",
+    "coral": "#FF6B6B",
+    "peach": "#FFCBA4",
+    "terracotta": "#CB6B4E",
+}
+
+
+def _color_name_to_hex(color_name: str) -> str:
+    """Return best-guess hex for a color name string, or empty string if unknown."""
+    key = color_name.strip().lower()
+    if key in _COLOR_NAME_HEX:
+        return _COLOR_NAME_HEX[key]
+    # Try partial match for names like "Dark Navy Blue"
+    for name, hex_val in _COLOR_NAME_HEX.items():
+        if name in key or key in name:
+            return hex_val
+    return ""
