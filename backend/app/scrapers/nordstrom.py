@@ -1,9 +1,10 @@
 """
-Nordstrom scraper — uses Nordstrom's internal GraphQL/REST API
-that powers their website, plus BeautifulSoup for detail pages.
+Nordstrom scraper — uses Playwright to navigate search results pages
+and intercepts XHR product data, with DOM extraction as fallback.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -15,21 +16,16 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
-# Nordstrom search endpoint used by their SPA
-NORDSTROM_SEARCH_API = "https://www.nordstrom.com/api/search"
-
-# Category keywords aligned to Deep Winter style preferences
+# Search queries targeting Deep Winter fabric preferences
 NORDSTROM_QUERIES = [
+    "silk dress women",
     "silk blouse women",
     "linen dress women",
-    "silk dress women",
-    "structured cotton top women",
     "silk skirt women",
     "linen pants women",
     "silk pants women",
+    "structured cotton blouse women",
 ]
-
-NORDSTROM_DEPT = "Women"
 
 
 class NordstromScraper(BaseScraper):
@@ -42,112 +38,189 @@ class NordstromScraper(BaseScraper):
     async def scrape(self) -> AsyncIterator[RawProduct]:
         page = await self._new_page()
         count = 0
+        captured_products: list[dict] = []
+
+        async def on_response(response):
+            try:
+                url = response.url
+                ct = response.headers.get("content-type", "")
+                if response.status == 200 and "json" in ct and (
+                    "/api/search" in url
+                    or "/sr?" in url
+                    or "nordstrom.com/api" in url
+                ):
+                    data = await response.json()
+                    products = (
+                        data.get("products")
+                        or data.get("results")
+                        or data.get("items")
+                        or []
+                    )
+                    if products:
+                        captured_products.extend(products)
+                        logger.info(
+                            "Nordstrom intercepted %d products from %s",
+                            len(products), url
+                        )
+            except Exception as exc:
+                logger.debug("Nordstrom response parse error: %s", exc)
+
+        page.on("response", on_response)
 
         for query in NORDSTROM_QUERIES:
             if count >= self.max_products:
                 break
 
-            offset = 0
-            page_size = 48
+            captured_products.clear()
+            url = f"https://www.nordstrom.com/sr?origin=keywordsearch&keyword={quote(query)}"
+            logger.info("Nordstrom navigating: %s", url)
 
-            while count < self.max_products:
-                # Nordstrom uses a JSON API at /api/search
-                params = (
-                    f"?query={quote(query)}"
-                    f"&offset={offset}"
-                    f"&pageSize={page_size}"
-                    f"&department={NORDSTROM_DEPT}"
-                    f"&priceMin={int(settings.price_min)}"
-                    f"&priceMax={int(settings.price_max)}"
-                    f"&country=US"
-                    f"&currency=USD"
-                    f"&lang=en-US"
-                )
-                url = NORDSTROM_SEARCH_API + params
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=60_000)
+                await asyncio.sleep(3)
+            except Exception as exc:
+                logger.warning("Nordstrom navigation failed for '%s': %s", query, exc)
+                continue
 
-                try:
-                    response = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                    if not response or response.status != 200:
-                        logger.warning("Nordstrom API %s for query '%s'", response and response.status, query)
-                        break
+            # If XHR interception didn't capture anything, fall back to DOM
+            items = captured_products if captured_products else await self._extract_from_dom(page)
 
-                    body = await response.body()
-                    data = json.loads(body)
-                except Exception as exc:
-                    logger.error("Nordstrom fetch error query=%s offset=%s: %s", query, offset, exc)
+            if not items:
+                logger.warning("Nordstrom: no products found for query '%s'", query)
+                continue
+
+            for item in items:
+                if count >= self.max_products:
                     break
+                product = self._parse_listing(item)
+                if product:
+                    yield product
+                    count += 1
 
-                items = (
-                    data.get("products")
-                    or data.get("results")
-                    or data.get("items")
-                    or []
-                )
-                if not items:
-                    break
-
-                for item in items:
-                    product = self._parse_listing(item)
-                    if product:
-                        yield product
-                        count += 1
-                        if count >= self.max_products:
-                            break
-
-                if len(items) < page_size:
-                    break
-
-                offset += page_size
-                await self._delay()
+            await self._delay()
 
         await page.close()
 
+    async def _extract_from_dom(self, page) -> list[dict]:
+        """Extract product data directly from the rendered Nordstrom DOM."""
+        try:
+            # Wait for product tiles to appear
+            await page.wait_for_selector(
+                '[data-element-id="product-results"], [class*="product-module"], article',
+                timeout=15_000
+            )
+
+            products = await page.evaluate("""() => {
+                const results = [];
+
+                // Try multiple selector strategies Nordstrom uses
+                const selectors = [
+                    '[data-element-id="product-module"]',
+                    '[class*="productModule"]',
+                    'article[class*="product"]',
+                    '[data-testid*="product"]',
+                ];
+
+                let tiles = [];
+                for (const sel of selectors) {
+                    tiles = document.querySelectorAll(sel);
+                    if (tiles.length > 0) break;
+                }
+
+                tiles.forEach(tile => {
+                    try {
+                        const link = tile.querySelector('a[href*="/s/"]') || tile.querySelector('a');
+                        const img = tile.querySelector('img');
+                        const nameEl = tile.querySelector('[class*="title"], [class*="name"], [data-element-id*="title"]');
+                        const brandEl = tile.querySelector('[class*="brand"], [data-element-id*="brand"]');
+                        const priceEl = tile.querySelector('[class*="price"], [data-element-id*="price"]');
+
+                        const href = link?.href || '';
+                        const name = nameEl?.textContent?.trim() || link?.getAttribute('aria-label') || '';
+                        const brand = brandEl?.textContent?.trim() || '';
+                        const priceText = priceEl?.textContent?.trim() || '';
+                        const imageUrl = img?.src || img?.getAttribute('data-src') || '';
+
+                        // Extract product ID from URL
+                        const idMatch = href.match(/\\/s\\/[^/]+\\/(\\d+)/);
+                        const productId = idMatch ? idMatch[1] : href.split('/').pop();
+
+                        if (name && href) {
+                            results.push({
+                                id: productId,
+                                name,
+                                brand,
+                                priceText,
+                                url: href,
+                                imageUrl,
+                            });
+                        }
+                    } catch (e) {}
+                });
+
+                return results;
+            }""")
+
+            logger.info("Nordstrom DOM extraction found %d products", len(products))
+            return products
+        except Exception as exc:
+            logger.warning("Nordstrom DOM extraction failed: %s", exc)
+            return []
+
     def _parse_listing(self, item: dict) -> Optional[RawProduct]:
         try:
-            # Nordstrom API uses styleId or productId
-            product_id = str(item.get("styleId") or item.get("productId") or item.get("id", ""))
+            # Handle both API JSON and DOM-extracted dicts
+            product_id = str(
+                item.get("styleId")
+                or item.get("productId")
+                or item.get("id")
+                or ""
+            )
             if not product_id:
                 return None
 
-            name = (item.get("productTitle") or item.get("name") or "").strip()
+            name = (
+                item.get("productTitle")
+                or item.get("name")
+                or ""
+            ).strip()
+            if not name:
+                return None
+
             brand_name = (
                 item.get("brandName")
-                or item.get("brand", {}).get("name", "")
+                or item.get("brand", {}).get("name", "") if isinstance(item.get("brand"), dict) else item.get("brand", "")
                 or ""
             ).strip()
 
-            # Price — Nordstrom nests it differently across API versions
             price = self._extract_price(item)
             if price is None or not (settings.price_min <= price <= settings.price_max):
                 return None
 
             color_name = (
                 item.get("colorDefaultName")
-                or item.get("color", {}).get("name", "")
+                or (item.get("color", {}).get("name", "") if isinstance(item.get("color"), dict) else "")
                 or item.get("colorName", "")
                 or ""
             )
 
-            # Image
-            media = item.get("media", {})
             image_url = (
-                media.get("main", {}).get("src", "")
-                or item.get("imageUrl", "")
+                item.get("imageUrl")
+                or (item.get("media", {}).get("main", {}).get("src", "") if isinstance(item.get("media"), dict) else "")
                 or item.get("heroImage", "")
                 or ""
             )
 
-            # URL
-            slug = item.get("productUrl") or item.get("url") or f"/s/product/{product_id}"
-            if not slug.startswith("http"):
-                slug = f"https://www.nordstrom.com{slug}"
+            url = item.get("url") or item.get("productUrl") or f"https://www.nordstrom.com/s/product/{product_id}"
+            if url and not url.startswith("http"):
+                url = f"https://www.nordstrom.com{url}"
 
             return RawProduct(
                 source="nordstrom",
                 external_id=product_id,
                 name=name,
                 brand=brand_name,
-                url=slug,
+                url=url,
                 price=price,
                 currency="USD",
                 color_name=color_name,
@@ -156,11 +229,20 @@ class NordstromScraper(BaseScraper):
                 fabric_raw="",
             )
         except Exception as exc:
-            logger.debug("Failed to parse Nordstrom listing: %s", exc)
+            logger.debug("Nordstrom parse error: %s", exc)
             return None
 
     def _extract_price(self, item: dict) -> Optional[float]:
-        """Handle Nordstrom's varied price structures."""
+        # Handle DOM-extracted priceText like "$245.00" or "$120 – $245"
+        price_text = item.get("priceText", "")
+        if price_text:
+            nums = re.findall(r'[\d,]+\.?\d*', price_text.replace(",", ""))
+            if nums:
+                try:
+                    return float(nums[0])
+                except ValueError:
+                    pass
+
         for key in ("currentMaxPrice", "currentMinPrice", "regularPrice", "salePrice", "price"):
             val = item.get(key)
             if isinstance(val, (int, float)):
@@ -181,56 +263,44 @@ class NordstromScraper(BaseScraper):
         page = await self._new_page()
         try:
             await page.goto(product.url, wait_until="networkidle", timeout=45_000)
-
-            # Nordstrom renders product details as JSON-LD + hidden elements
             content = await page.content()
             product.fabric_raw = self._extract_fabric(content)
             product.description = self._extract_description(content)
 
-            # Also try clicking the "Details" tab if it exists
-            try:
-                details_btn = await page.query_selector('[data-test="accordion-details"]')
-                if details_btn:
-                    await details_btn.click()
-                    await page.wait_for_timeout(1000)
-                    content2 = await page.content()
-                    fabric2 = self._extract_fabric(content2)
-                    if fabric2:
-                        product.fabric_raw = fabric2
-            except Exception:
-                pass
-
+            if not product.fabric_raw:
+                # Try clicking the Details accordion
+                try:
+                    btn = await page.query_selector('[data-test="accordion-details"], [aria-label*="details" i]')
+                    if btn:
+                        await btn.click()
+                        await page.wait_for_timeout(1500)
+                        product.fabric_raw = self._extract_fabric(await page.content())
+                except Exception:
+                    pass
         except Exception as exc:
             logger.debug("Nordstrom enrich failed for %s: %s", product.external_id, exc)
         finally:
             await page.close()
         return product
 
-    # ------------------------------------------------------------------
-    # Parsing helpers
-    # ------------------------------------------------------------------
-
     def _extract_fabric(self, html: str) -> str:
-        # JSON-LD first
         ld_match = re.search(r'<script type="application/ld\+json">(.*?)</script>', html, re.S)
         if ld_match:
             try:
                 ld = json.loads(ld_match.group(1))
                 if isinstance(ld, list):
                     ld = ld[0]
-                description = ld.get("description", "")
-                fabric = self._fabric_from_text(description)
-                if fabric:
-                    return fabric
+                desc = ld.get("description", "")
+                m = re.search(r'(\d{1,3}%\s*\w[\w\s,/]+(?:,?\s*\d{1,3}%\s*\w[\w\s,/]+)*)', desc)
+                if m:
+                    return m.group(1).strip()
             except Exception:
                 pass
 
-        # Nordstrom puts fabric in a detail list
-        patterns = [
+        for pattern in [
             r'<li[^>]*>\s*(?:Fabric|Material|Composition|Content)[:\s]*([^<]{5,150})</li>',
             r'(?:Fabric|Material|Composition|Content)[:\s]+([^\n<.;]{5,150})',
-        ]
-        for pattern in patterns:
+        ]:
             m = re.search(pattern, html, re.I)
             if m:
                 return m.group(1).strip()
@@ -238,13 +308,6 @@ class NordstromScraper(BaseScraper):
 
     def _extract_description(self, html: str) -> str:
         m = re.search(r'<meta name="description" content="([^"]{10,500})"', html, re.I)
-        if m:
-            return m.group(1).strip()
-        return ""
-
-    @staticmethod
-    def _fabric_from_text(text: str) -> str:
-        m = re.search(r'(\d{1,3}%\s*\w[\w\s,/]+(?:\d{1,3}%\s*\w[\w\s,/]+)*)', text)
         if m:
             return m.group(1).strip()
         return ""

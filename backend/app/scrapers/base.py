@@ -69,9 +69,9 @@ class BaseScraper(ABC):
     async def _new_page(self) -> Page:
         assert self._context, "Call __aenter__ first"
         page = await self._context.new_page()
-        # Block heavy assets to speed up scraping
+        # Block only fonts — allow images so pages render normally (helps avoid bot detection)
         await page.route(
-            "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,otf}",
+            "**/*.{woff,woff2,ttf,otf}",
             lambda route: route.abort(),
         )
         return page
