@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # API Keys
     google_vision_api_key: str = ""
     anthropic_api_key: str = ""
+    apify_api_token: str = ""
 
     # App
     app_env: str = "development"
