@@ -12,8 +12,12 @@ class MatchOut(BaseModel):
     product: ProductOut
     color_score: int
     fabric_score: int
+    style_score: Optional[int]
+    florida_score: Optional[int]
     overall_score: int
     is_borderline_color: bool
+    auto_rejected: bool
+    auto_reject_reason: Optional[str]
     claude_style_analysis: Optional[str]
     claude_color_reasoning: Optional[str]
     claude_flags: Optional[list]

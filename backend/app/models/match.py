@@ -16,11 +16,17 @@ class Match(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    # Scoring
-    color_score = Column(Integer, nullable=False)          # 0–100 from Delta-E
-    fabric_score = Column(Integer, nullable=False)         # 0–100
-    overall_score = Column(Integer, nullable=False)        # weighted composite
+    # Scoring — 4-component system (total 0–100)
+    color_score = Column(Integer, nullable=False)          # 0–40 (tier-based)
+    fabric_score = Column(Integer, nullable=False)         # 0–30
+    style_score = Column(Integer)                          # 0–20 (brand DNA)
+    florida_score = Column(Integer)                        # 0–10 (heat suitability)
+    overall_score = Column(Integer, nullable=False)        # sum of above
     is_borderline_color = Column(Boolean, default=False)   # ΔE in gray zone
+
+    # Auto-reject tracking
+    auto_rejected = Column(Boolean, default=False)
+    auto_reject_reason = Column(Text)
 
     # Claude analysis
     claude_style_analysis = Column(Text)       # "Why this works for Deep Winter…"

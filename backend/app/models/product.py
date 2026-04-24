@@ -39,6 +39,9 @@ class Product(Base):
     fabric_score = Column(Integer)                 # 0–100
     has_excluded_fabric = Column(Boolean, default=False)
 
+    # Color tier: "tier1" | "tier2" | "tier3" | "hard_avoid" | "unknown"
+    color_tier = Column(String(16), index=True)
+
     # Metadata
     description = Column(Text)
     available_sizes = Column(JSON)

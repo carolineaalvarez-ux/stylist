@@ -16,6 +16,7 @@ class ProductOut(BaseModel):
     price: float
     currency: str
     color_name: Optional[str]
+    color_tier: Optional[str]
     dominant_colors: Optional[list]
     color_match_score: Optional[int]
     closest_palette_color: Optional[str]
