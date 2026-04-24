@@ -6,7 +6,6 @@ import asyncio
 import json
 import re
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 
 URL = "https://www.nordstrom.com/sr?origin=keywordsearch&keyword=silk+blouse+women"
 
@@ -26,8 +25,13 @@ async def main():
             viewport={"width": 1280, "height": 900},
             locale="en-US",
         )
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'plugins', { get: () => [{ name: 'Chrome PDF Plugin' }] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            window.chrome = { runtime: {} };
+        """)
         page = await context.new_page()
-        await stealth_async(page)
 
         json_responses = []
 

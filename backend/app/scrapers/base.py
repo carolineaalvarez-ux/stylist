@@ -9,11 +9,40 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
-from playwright_stealth import stealth_async
 
 from ..config import settings
 
 logger = logging.getLogger(__name__)
+
+# Injected into every page before any script runs.
+# Masks the most common headless-browser fingerprints that Nordstrom
+# and similar sites check before serving real content.
+_STEALTH_SCRIPT = """
+// Hide navigator.webdriver
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+// Fake realistic plugin list
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        { name: 'Chrome PDF Plugin' },
+        { name: 'Chrome PDF Viewer' },
+        { name: 'Native Client' },
+    ],
+});
+
+// Fake language settings
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+// Spoof chrome runtime so sites see a real Chrome object
+window.chrome = { runtime: {} };
+
+// Mask headless in permissions API
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) =>
+    parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+"""
 
 
 @dataclass
@@ -58,6 +87,8 @@ class BaseScraper(ABC):
             viewport={"width": 1280, "height": 900},
             locale="en-US",
         )
+        # Apply stealth script to every page opened from this context
+        await self._context.add_init_script(_STEALTH_SCRIPT)
         return self
 
     async def __aexit__(self, *_):
@@ -70,7 +101,6 @@ class BaseScraper(ABC):
     async def _new_page(self) -> Page:
         assert self._context, "Call __aenter__ first"
         page = await self._context.new_page()
-        await stealth_async(page)
         # Block heavy assets to speed up scraping
         await page.route(
             "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,otf}",
