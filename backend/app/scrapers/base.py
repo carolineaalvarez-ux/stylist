@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+from playwright_stealth import stealth_async
 
 from ..config import settings
 
@@ -69,6 +70,7 @@ class BaseScraper(ABC):
     async def _new_page(self) -> Page:
         assert self._context, "Call __aenter__ first"
         page = await self._context.new_page()
+        await stealth_async(page)
         # Block heavy assets to speed up scraping
         await page.route(
             "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,otf}",

@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 URL = "https://www.nordstrom.com/sr?origin=keywordsearch&keyword=silk+blouse+women"
 
@@ -26,6 +27,7 @@ async def main():
             locale="en-US",
         )
         page = await context.new_page()
+        await stealth_async(page)
 
         json_responses = []
 
