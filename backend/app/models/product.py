@@ -8,7 +8,6 @@ from ..database import Base
 
 
 class ScraperSource(str, enum.Enum):
-    asos = "asos"
     nordstrom = "nordstrom"
 
 

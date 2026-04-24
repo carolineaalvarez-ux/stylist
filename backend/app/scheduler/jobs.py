@@ -34,7 +34,6 @@ from ..database import AsyncSessionLocal
 from ..models import Alert, Match, Product
 from ..models.alert import AlertType
 from ..models.product import ScraperSource
-from ..scrapers.asos import AsosScraper
 from ..scrapers.nordstrom import NordstromScraper
 
 logger = logging.getLogger(__name__)
@@ -52,8 +51,6 @@ async def run_scrape_pipeline(source: Optional[str] = None):
     claude = ClaudeAnalyzer()
 
     scrapers = []
-    if source in (None, "asos"):
-        scrapers.append(AsosScraper())
     if source in (None, "nordstrom"):
         scrapers.append(NordstromScraper())
 
